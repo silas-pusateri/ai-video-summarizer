@@ -2,6 +2,7 @@ import json
 import time
 import os
 import re
+import subprocess
 
 import requests
 
@@ -18,7 +19,7 @@ def start_transcription(url, config):
     data = {
         "version": config["replicate_model_version"],
         "input": {
-            "debug": False,
+            "debug": True,
             "language": "en",
             "vad_onset": 0.5,
             "audio_file": url,
@@ -63,60 +64,117 @@ def generate_content(transcript, goal, config):
     }
 
     prompts = {
-        TranscriptionGoal.MEETING_MINUTES: "Create very detailed meeting minutes based on the following transcription:",
-        TranscriptionGoal.PODCAST_SUMMARY: "Summarize this podcast episode, highlighting key points and interesting discussions:",
-        TranscriptionGoal.LECTURE_NOTES: "Create comprehensive lecture notes from this transcription, organizing key concepts and examples:",
-        TranscriptionGoal.INTERVIEW_HIGHLIGHTS: "Extract the main insights and notable quotes from this interview transcription:",
-        TranscriptionGoal.GENERAL_TRANSCRIPTION: "Provide a clear and concise summary of the main points discussed in this transcription:",
+        TranscriptionGoal.MEETING_MINUTES: "Create very detailed meeting minutes based on the following transcription. Return the response as a JSON object with a 'content' field containing the meeting minutes:",
+        TranscriptionGoal.PODCAST_SUMMARY: "Summarize this podcast episode, highlighting key points and interesting discussions. Return the response as a JSON object with a 'content' field containing the summary:",
+        TranscriptionGoal.LECTURE_NOTES: "Create comprehensive lecture notes from this transcription, organizing key concepts and examples. Return the response as a JSON object with a 'content' field containing the lecture notes:",
+        TranscriptionGoal.INTERVIEW_HIGHLIGHTS: "Extract the main insights and notable quotes from this interview transcription. Return the response as a JSON object with a 'content' field containing the highlights:",
+        TranscriptionGoal.GENERAL_TRANSCRIPTION: "Provide a clear and concise summary of the main points discussed in this transcription. Return the response as a JSON object with a 'content' field containing the summary:",
     }
 
     prompt = prompts.get(goal, prompts[TranscriptionGoal.GENERAL_TRANSCRIPTION])
-
+    
+    # Updated request format for Anthropic's messages API
     data = {
         "model": config["anthropic_model"],
-        "temperature": 0,
+        "messages": [
+            {
+                "role": "user",
+                "content": f"""You are a specialized content generation assistant. You must ALWAYS return responses in valid JSON format.
+                Do not include any explanatory text, markdown, or other formatting outside the JSON structure.
+                If you need to include newlines in the content, use '\n' in the JSON string.
+
+                {prompt} {json.dumps(transcript)}"""
+            }
+        ],
         "max_tokens": 4000,
-        "messages": [{"role": "user", "content": f"{prompt} {json.dumps(transcript)}"}],
+        "temperature": 0
     }
+    
     logger.debug(f"Sending request to Anthropic API: {config['anthropic_api_url']}")
     response = requests.post(config["anthropic_api_url"], headers=headers, json=data)
-    print(response)
     logger.debug(f"Anthropic API response: {response.text}")
 
-    # Log the full AI response
-    logger.debug(
-        f"Full AI response for content generation:\n{response.json()['content'][0]['text']}"
-    )
-
-    return response.json()["content"][0]["text"]
+    try:
+        response_json = response.json()
+        
+        # Check for API errors first
+        if "error" in response_json:
+            error_msg = response_json.get("error", {}).get("message", "Unknown error")
+            logger.error(f"Anthropic API error: {error_msg}")
+            raise Exception(f"Anthropic API error: {error_msg}")
+            
+        # Get the text content from the response
+        message_content = response_json.get("content", [{}])[0].get("text", "")
+        if not message_content:
+            raise Exception("No content in response")
+            
+        # Clean the content string of any control characters
+        message_content = "".join(char for char in message_content if ord(char) >= 32 or char == '\n')
+            
+        try:
+            # First try to parse the entire message content
+            content = json.loads(message_content)
+            return content["content"]
+        except (json.JSONDecodeError, KeyError):
+            # If that fails, try to extract just the content field using regex
+            import re
+            content_match = re.search(r'"content"\s*:\s*"([^"]*(?:"[^"]*"[^"]*)*)"', message_content)
+            if content_match:
+                content_text = content_match.group(1)
+                # Unescape any escaped quotes within the content
+                content_text = content_text.replace('\\"', '"')
+                return content_text
+            else:
+                logger.error(f"Could not extract content from response: {message_content}")
+                raise Exception("Could not parse content from AI response")
+        
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse AI response as JSON: {e}")
+        logger.error(f"Raw response content: {message_content}")
+        raise Exception("AI response was not in valid JSON format")
+    except KeyError as e:
+        logger.error(f"Unexpected response structure: {e}")
+        logger.error(f"Response JSON: {response_json}")
+        raise Exception("Unexpected response structure from Anthropic API")
+    except Exception as e:
+        logger.error(f"Unexpected error processing AI response: {str(e)}")
+        raise Exception(f"Error processing AI response: {str(e)}")
 
 
 def create_media_clips(transcript, content, source_file, dest_folder, goal, config):
     logger.debug(f"Creating media clips for goal: {goal.value}")
-    topic_extraction_message = f"""
+    
+    topic_extraction_message = f"""You are a specialized JSON generation assistant. You must ALWAYS return responses in valid JSON format.
+    Do not include any explanatory text, markdown, or other formatting outside the JSON array structure.
+
     Based on the following {goal.value.replace('_', ' ')}:
     {content}
 
     Extract each of the main topics or segments discussed.
+    Return ONLY a JSON array of objects, with each object containing:
+    - 'title': A short, descriptive title (max 5 words)
+    - 'keywords': An array of related keywords (max 5 keywords)
 
-    For each topic/segment, provide:
-    1. A short, descriptive title (max 5 words)
-    2. A list of related keywords (max 5 keywords)
-
-    Format the response as a JSON array of objects, each containing 'title' and 'keywords' fields.
+    Do not include any explanatory text or formatting outside the JSON structure.
     """
+
     headers = {
         "x-api-key": config['anthropic_api_key'],
         "anthropic-version": "2023-06-01",
         "content-type": "application/json"
     }
+    
     topic_extraction_data = {
         "model": config['anthropic_model'],
         "max_tokens": 1000,
         "messages": [
-            {"role": "user", "content": topic_extraction_message}
+            {
+                "role": "user",
+                "content": topic_extraction_message
+            }
         ]
     }
+
     topic_response = requests.post(config['anthropic_api_url'], headers=headers, json=topic_extraction_data)
     topic_text = topic_response.json()['content'][0]['text']
     logger.debug(f"Full AI response for topic extraction:\n{topic_text}")
@@ -138,19 +196,18 @@ def create_media_clips(transcript, content, source_file, dest_folder, goal, conf
     Transcript:
     {json.dumps(transcript)}
 
-    For each topic/segment:
-    1. Find the part that best represents the topic/segment.
-    2. Aim for a clip duration of 2-5 minutes, but prioritize capturing the complete discussion or segment.
-    3. If the relevant content exceeds 5 minutes, include it entirely to avoid cutting off important information.
-    4. Ensure that the segment captures complete thoughts and ideas. Do not cut off in the middle of a sentence or a speaker's point.
-    5. It's better to include slightly more content than to risk cutting off important information.
+    Return ONLY a JSON array of objects, with each object containing:
+    - 'title': The topic/segment title
+    - 'start': Start time of the clip (in seconds)
+    - 'end': End time of the clip (in seconds)
 
-    Provide the results as a JSON array of objects, each containing:
-    - title: The topic/segment title
-    - start: Start time of the clip (in seconds)
-    - end: End time of the clip (in seconds)
+    Rules for clip selection:
+    1. Aim for 2-5 minutes duration
+    2. Include complete discussions even if over 5 minutes
+    3. Never cut off mid-sentence
+    4. Clips can overlap if needed
 
-    The clips can overlap if necessary to capture complete discussions or segments.
+    Do not include any explanatory text or formatting outside the JSON structure.
     """
 
     clip_generation_data = {
@@ -175,6 +232,18 @@ def create_media_clips(transcript, content, source_file, dest_folder, goal, conf
     if not clips:
         raise ValueError("Failed to extract clip information from the AI response")
 
+    # Find ffmpeg path or use default
+    try:
+        ffmpeg_path = subprocess.check_output(['which', 'ffmpeg'], text=True).strip()
+    except subprocess.CalledProcessError:
+        # If which command fails, try common locations
+        for path in ['/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/opt/homebrew/bin/ffmpeg']:
+            if os.path.exists(path):
+                ffmpeg_path = path
+                break
+        else:
+            raise Exception("ffmpeg not found. Please install ffmpeg and ensure it's in your PATH")
+
     ffmpeg_commands = []
     for clip in clips:
         safe_title = ''.join(c for c in clip['title'] if c.isalnum() or c in (' ', '_')).rstrip()
@@ -185,7 +254,7 @@ def create_media_clips(transcript, content, source_file, dest_folder, goal, conf
         buffer = 0.5
         start_time = max(0, start_time - buffer)
         end_time += buffer
-        command = f"/opt/homebrew/bin/ffmpeg -i {source_file} -ss {start_time:.2f} -to {end_time:.2f} -y -c copy {output_file}"
+        command = f'"{ffmpeg_path}" -i "{source_file}" -ss {start_time:.2f} -to {end_time:.2f} -y -c copy "{output_file}"'
         ffmpeg_commands.append(command)
 
     logger.debug(f"Generated FFmpeg commands: {ffmpeg_commands}")
