@@ -6,4 +6,9 @@ replicate_model_version: your-replicate-model-version
 huggingface_token: your-huggingface-token
 anthropic_api_key: your-anthropic-api-key
 anthropic_api_url: https://api.anthropic.com/v1/messages
+openai_api_key: your-openai-api-key
+openai_api_url: https://api.openai.com/v1/audio/transcriptions   # for transcription
+openai_chat_api_url: https://api.openai.com/v1/chat/completions     # for clip generation
+transcription_model: replicate   # Options: replicate, openai
+clip_generation_model: anthropic   # Options: anthropic, openai
 
