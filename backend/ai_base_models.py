@@ -5,8 +5,6 @@ from log import logger
 import requests
 from openai import OpenAI
 
-client = OpenAI(api_key=config["openai_api_key"])
-
 class AnthropicBaseModel:
     """Base class for Anthropic API interactions."""
 
@@ -126,14 +124,17 @@ class OpenAIBaseModel:
         Returns:
             The response text from the API.
         """
+        client = OpenAI(api_key=config["openai_api_key"])
 
         for attempt in range(retries + 1):
             try:
                 logger.debug(f"Sending OpenAI request (attempt {attempt + 1})")
-                response = client.chat.completions.create(model=config.get("openai_model", "gpt-3.5-turbo"),
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=0)
+                response = client.chat.completions.create(
+                    model=config.get("openai_model", "gpt-3.5-turbo"),
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=0
+                )
                 return response.choices[0].message.content
 
             except Exception as e:
