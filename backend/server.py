@@ -3,6 +3,7 @@ import subprocess
 import asyncio
 import zipfile
 import tempfile
+import shutil
 
 
 from fastapi import (
@@ -146,9 +147,15 @@ async def process_media(media_file: str, goal: TranscriptionGoal):
         return None
 
     finally:
+        # Clean up the original media file
         if os.path.exists(media_file):
             os.remove(media_file)
             logger.info(f"Temporary file {media_file} removed")
+        
+        # Clean up the output folder
+        if output_folder and os.path.exists(output_folder):
+            shutil.rmtree(output_folder)
+            logger.info(f"Temporary output folder {output_folder} removed")
 
 
 @app.post("/upload")
