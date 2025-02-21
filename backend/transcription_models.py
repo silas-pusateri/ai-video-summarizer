@@ -61,7 +61,7 @@ class WhisperXTranscriptionModel(TranscriptionModel, ReplicateBaseModel):
     def start_transcription(self, url: str, config: Dict) -> Dict:
         logger.debug(f"Starting transcription for URL: {url} using WhisperX")
         input_data = {
-            "debug": True,
+            "debug": False,
             "language": "en",
             "vad_onset": 0.5,
             "audio_file": url,
@@ -122,66 +122,6 @@ class IncrediblyFastWhisperTranscriptionModel(TranscriptionModel, ReplicateBaseM
             raise Exception(f"Failed to parse transcription result: {str(e)}")
 
 
-class LocalWhisperTranscriptionModel(TranscriptionModel):
-    """Implementation of local Whisper model."""
-
-    def __init__(self, model_path: str):
-        """Initialize with path to local model."""
-        self.model_path = model_path
-        # We'll load the model lazily when needed to avoid unnecessary memory usage
-        self._model = None
-
-    def _ensure_model_loaded(self):
-        """Load the model if not already loaded."""
-        if self._model is None:
-            try:
-                import whisper
-                logger.info(f"Loading Whisper model from {self.model_path}")
-                self._model = whisper.load_model(self.model_path)
-            except Exception as e:
-                logger.error(f"Failed to load Whisper model: {str(e)}")
-                raise
-
-    def start_transcription(self, url: str, config: Dict) -> Dict:
-        """
-        Start transcription using local Whisper model.
-        For local processing, we'll return a dict that mimics Replicate's response format
-        but contains the local file path instead of a prediction URL.
-        """
-        logger.debug(f"Starting local transcription for URL: {url}")
-        return {
-            "status": "processing",
-            "local_file": url,  # We'll use this in get_transcription_result
-        }
-
-    def get_transcription_result(self, prediction_url: str, config: Dict) -> List[Dict]:
-        """
-        Process the audio file using local Whisper model.
-        prediction_url in this case will be the local file path from start_transcription.
-        """
-        try:
-            self._ensure_model_loaded()
-            
-            # Load and transcribe the audio
-            logger.debug("Starting Whisper transcription")
-            result = self._model.transcribe(prediction_url)
-            
-            # Convert Whisper output format to match Replicate's format
-            segments = []
-            for segment in result["segments"]:
-                segments.append({
-                    "start": segment["start"],
-                    "end": segment["end"],
-                    "text": segment["text"].strip(),
-                })
-            
-            logger.info("Local transcription completed successfully")
-            return segments
-            
-        except Exception as e:
-            logger.error(f"Local transcription failed: {str(e)}")
-            raise Exception(f"Local transcription failed: {str(e)}")
-
 
 def get_transcription_model(config: Dict) -> TranscriptionModel:
     """Factory function to get the appropriate transcription model."""
@@ -203,12 +143,6 @@ def get_transcription_model(config: Dict) -> TranscriptionModel:
             return WhisperXTranscriptionModel(model_version)
         else:
             raise ValueError(f"Unknown Replicate model type: {selected}")
-        
-    elif model_type == "local_whisper":
-        model_path = config.get("local_whisper_model_path")
-        if not model_path:
-            raise ValueError("local_whisper_model_path must be specified when using local_whisper model")
-        return LocalWhisperTranscriptionModel(model_path)
         
     else:
         raise ValueError(f"Unknown transcription model: {model_type}") 

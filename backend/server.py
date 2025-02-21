@@ -29,6 +29,7 @@ from s3 import get_s3_presigned_url, upload_to_s3
 from log import logger, save_debug_info
 from transcription_goal import TranscriptionGoal
 from utils import load_config
+from exporters import get_exporter
 
 
 
@@ -93,6 +94,12 @@ async def process_media(media_file: str, goal: TranscriptionGoal):
         update_processing_status("processing", 0, "Starting transcription process")
         logger.info(f"Processing started for {media_file} with goal {goal}")
 
+        # Get the configured exporter
+        export_format = config.get("export_format")
+        logger.debug(f"Export format from config: '{export_format}'")
+        exporter = get_exporter(export_format)
+        logger.debug(f"Using exporter for format: {export_format or 'markdown'}")
+
         # Use asyncio.to_thread for potentially blocking operations
         update_processing_status("processing", 10, "Uploading file to S3")
         await asyncio.to_thread(upload_to_s3, media_file, config)
@@ -110,18 +117,25 @@ async def process_media(media_file: str, goal: TranscriptionGoal):
         output_name = os.path.splitext(os.path.basename(media_file))[0]
         output_folder = os.path.join(os.path.dirname(media_file), output_name)
         os.makedirs(output_folder, exist_ok=True)
-        transcription_file = os.path.join(output_folder, f"{output_name}_transcription.txt")
-        with open(transcription_file, 'w') as f:
-            for segment in transcript:
-                f.write(f"{segment['start']} - {segment['end']}: {segment['text']}\n")
+        
+        # Format transcription content
+        transcription_content = ""
+        for segment in transcript:
+            transcription_content += f"{segment['start']} - {segment['end']}: {segment['text']}\n"
+        
+        # Save transcription using configured exporter
+        transcription_file = os.path.join(output_folder, f"{output_name}_transcription{exporter.get_extension()}")
+        with open(transcription_file, 'wb') as f:
+            f.write(exporter.export(transcription_content))
         logger.info(f"Transcription saved to {transcription_file}")
 
         content = await asyncio.to_thread(generate_content, transcript, goal, config)
         update_processing_status("processing", 60, f"Generating {goal.value.replace('_', ' ')}")
 
-        output_file = os.path.join(output_folder, f"{output_name}_{goal.value}.md")
-        with open(output_file, 'w') as f:
-            f.write(content)
+        # Save content using configured exporter
+        output_file = os.path.join(output_folder, f"{output_name}_{goal.value}{exporter.get_extension()}")
+        with open(output_file, 'wb') as f:
+            f.write(exporter.export(content))
         update_processing_status("processing", 70, "Saving generated content")
 
         ffmpeg_commands, topics, clips = await asyncio.to_thread(create_media_clips, transcript, content, media_file, output_folder, goal, config)
