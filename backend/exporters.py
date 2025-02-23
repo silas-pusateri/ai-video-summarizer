@@ -100,18 +100,36 @@ def get_exporter(export_format: Optional[str] = None) -> BaseExporter:
     """
     # Trim extra whitespace and convert to lowercase
     format_lower = (export_format or "markdown").strip().lower()
+    logger.debug(f"Initializing exporter for format: '{format_lower}'")
     
     try:
         if format_lower == "pdf":
-            return PDFExporter()
-        elif format_lower == "docx":
-            return DocxExporter()
-        elif format_lower == "markdown":
+            logger.info("Creating PDF exporter")
+            try:
+                exporter = PDFExporter()
+                logger.info("PDF exporter created successfully")
+                return exporter
+            except ImportError as e:
+                logger.error(f"Failed to create PDF exporter due to missing dependencies: {e}")
+                logger.warning("Falling back to markdown export")
+                return MarkdownExporter()
+        elif format_lower in ["docx", "doc"]:  # Support both docx and doc
+            logger.info("Creating DOCX exporter")
+            try:
+                exporter = DocxExporter()
+                logger.info("DOCX exporter created successfully")
+                return exporter
+            except ImportError as e:
+                logger.error(f"Failed to create DOCX exporter due to missing dependencies: {e}")
+                logger.warning("Falling back to markdown export")
+                return MarkdownExporter()
+        elif format_lower in ["markdown", "md"]:  # Support both markdown and md
+            logger.info("Creating Markdown exporter")
             return MarkdownExporter()
         else:
             logger.warning(f"Unknown export format '{format_lower}', falling back to markdown")
             return MarkdownExporter()
-    except ImportError as e:
-        logger.error(f"Failed to initialize {format_lower} exporter: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error initializing {format_lower} exporter: {e}")
         logger.warning("Falling back to markdown export")
         return MarkdownExporter() 
