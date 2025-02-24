@@ -25,7 +25,10 @@ def execute_ffmpeg_commands(commands):
 
 
 def main(
-    media_file, goal=TranscriptionGoal.GENERAL_TRANSCRIPTION, progress_callback=None
+    media_file, 
+    goal=TranscriptionGoal.GENERAL_TRANSCRIPTION, 
+    progress_callback=None,
+    runtime_config=None
 ):
     try:
         logger.info(f"Starting main process for file: {media_file}")
@@ -33,7 +36,12 @@ def main(
             progress_callback("Starting transcription process", 0)
 
         config = load_config()
-        logger.debug(f"Loaded configuration: {config}")
+        
+        # Merge runtime config if provided
+        if runtime_config:
+            config.update(runtime_config)
+            
+        logger.debug(f"Using configuration: {config}")
 
         # Get the configured exporter
         export_format = config.get("export_format")
